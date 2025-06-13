@@ -7,7 +7,13 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Union, cast
 
 from haystack import component, default_from_dict, default_to_dict
-from haystack.dataclasses import ComponentInfo, StreamingCallbackT, StreamingChunk, select_streaming_callback
+from haystack.dataclasses import (
+    ComponentInfo,
+    StreamingCallbackT,
+    StreamingChunk,
+    SyncStreamingCallbackT,
+    select_streaming_callback,
+)
 from haystack.lazy_imports import LazyImport
 from haystack.utils import Secret, deserialize_callable, deserialize_secrets_inplace, serialize_callable
 from haystack.utils.hf import HFGenerationAPIType, HFModelType, check_valid_model
@@ -214,13 +220,13 @@ class HuggingFaceAPIGenerator:
         )
 
         if streaming_callback is not None:
-            return self._stream_and_build_response(hf_output, streaming_callback)
+            return self._stream_and_build_response(hf_output=hf_output, streaming_callback=streaming_callback)
 
         # mypy doesn't know that hf_output is a TextGenerationOutput, so we cast it
         return self._build_non_streaming_response(cast(TextGenerationOutput, hf_output))
 
     def _stream_and_build_response(
-        self, hf_output: Iterable["TextGenerationStreamOutput"], streaming_callback: StreamingCallbackT
+        self, hf_output: Iterable["TextGenerationStreamOutput"], streaming_callback: SyncStreamingCallbackT
     ):
         chunks: List[StreamingChunk] = []
         first_chunk_time = None
@@ -235,7 +241,9 @@ class HuggingFaceAPIGenerator:
             if first_chunk_time is None:
                 first_chunk_time = datetime.now().isoformat()
 
-            stream_chunk = StreamingChunk(content=token.text, meta=chunk_metadata, component_info=component_info)
+            stream_chunk = StreamingChunk(
+                content=token.text, meta=chunk_metadata, component_info=component_info, index=0, start=len(chunks) == 0
+            )
             chunks.append(stream_chunk)
             streaming_callback(stream_chunk)
 

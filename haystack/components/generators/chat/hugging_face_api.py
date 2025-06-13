@@ -8,8 +8,16 @@ from typing import Any, AsyncIterable, Dict, Iterable, List, Optional, Union
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.components.generators.utils import _convert_streaming_chunks_to_chat_message
-from haystack.dataclasses import ChatMessage, ComponentInfo, StreamingChunk, ToolCall, select_streaming_callback
-from haystack.dataclasses.streaming_chunk import StreamingCallbackT
+from haystack.dataclasses import (
+    AsyncStreamingCallbackT,
+    ChatMessage,
+    ComponentInfo,
+    StreamingCallbackT,
+    StreamingChunk,
+    SyncStreamingCallbackT,
+    ToolCall,
+    select_streaming_callback,
+)
 from haystack.lazy_imports import LazyImport
 from haystack.tools import (
     Tool,
@@ -103,7 +111,9 @@ def _convert_tools_to_hfapi_tools(
 
 
 def _convert_chat_completion_stream_output_to_streaming_chunk(
-    chunk: "ChatCompletionStreamOutput", component_info: Optional[ComponentInfo] = None
+    chunk: "ChatCompletionStreamOutput",
+    previous_chunks: List[StreamingChunk],
+    component_info: Optional[ComponentInfo] = None,
 ) -> StreamingChunk:
     """
     Converts the Hugging Face API ChatCompletionStreamOutput to a StreamingChunk.
@@ -127,6 +137,10 @@ def _convert_chat_completion_stream_output_to_streaming_chunk(
         content=choice.delta.content or "",
         meta={"model": chunk.model, "received_at": datetime.now().isoformat(), "finish_reason": choice.finish_reason},
         component_info=component_info,
+        # Index must always be 0 since we don't allow tool calls in streaming mode.
+        index=0 if choice.finish_reason is None else None,
+        # start is True at the very beginning since first chunk contains role information + first part of the answer.
+        start=len(previous_chunks) == 0,
     )
     return stream_chunk
 
@@ -431,7 +445,10 @@ class HuggingFaceAPIChatGenerator:
         return await self._run_non_streaming_async(formatted_messages, generation_kwargs, hf_tools)
 
     def _run_streaming(
-        self, messages: List[Dict[str, str]], generation_kwargs: Dict[str, Any], streaming_callback: StreamingCallbackT
+        self,
+        messages: List[Dict[str, str]],
+        generation_kwargs: Dict[str, Any],
+        streaming_callback: SyncStreamingCallbackT,
     ):
         api_output: Iterable[ChatCompletionStreamOutput] = self._client.chat_completion(
             messages,
@@ -441,10 +458,10 @@ class HuggingFaceAPIChatGenerator:
         )
 
         component_info = ComponentInfo.from_component(self)
-        streaming_chunks = []
+        streaming_chunks: List[StreamingChunk] = []
         for chunk in api_output:
             streaming_chunk = _convert_chat_completion_stream_output_to_streaming_chunk(
-                chunk=chunk, component_info=component_info
+                chunk=chunk, previous_chunks=streaming_chunks, component_info=component_info
             )
             streaming_chunks.append(streaming_chunk)
             streaming_callback(streaming_chunk)
@@ -495,7 +512,10 @@ class HuggingFaceAPIChatGenerator:
         return {"replies": [message]}
 
     async def _run_streaming_async(
-        self, messages: List[Dict[str, str]], generation_kwargs: Dict[str, Any], streaming_callback: StreamingCallbackT
+        self,
+        messages: List[Dict[str, str]],
+        generation_kwargs: Dict[str, Any],
+        streaming_callback: AsyncStreamingCallbackT,
     ):
         api_output: AsyncIterable[ChatCompletionStreamOutput] = await self._async_client.chat_completion(
             messages,
@@ -505,10 +525,10 @@ class HuggingFaceAPIChatGenerator:
         )
 
         component_info = ComponentInfo.from_component(self)
-        streaming_chunks = []
+        streaming_chunks: List[StreamingChunk] = []
         async for chunk in api_output:
             stream_chunk = _convert_chat_completion_stream_output_to_streaming_chunk(
-                chunk=chunk, component_info=component_info
+                chunk=chunk, previous_chunks=streaming_chunks, component_info=component_info
             )
             streaming_chunks.append(stream_chunk)
             await streaming_callback(stream_chunk)  # type: ignore
